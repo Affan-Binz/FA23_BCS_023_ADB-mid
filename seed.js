@@ -4,14 +4,11 @@ const path = require('path');
 const mongoose = require('mongoose');
 require('dotenv').config(); // Load .env file
 
-// Import all your models
 const User = require('./models/User');
 const Product = require('./models/Product');
 const Order = require('./models/Order');
 const Review = require('./models/Review');
 
-// --- READ JSON DATA ---
-// Update these filenames to match what you have in your /data folder
 const users = JSON.parse(fs.readFileSync(path.join(__dirname, 'data', 'users.json'), 'utf-8'));
 const products = JSON.parse(fs.readFileSync(path.join(__dirname, 'data', 'products.json'), 'utf-8'));
 const orders = JSON.parse(fs.readFileSync(path.join(__dirname, 'data', 'orders.json'), 'utf-8'));

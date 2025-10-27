@@ -21,26 +21,18 @@ const PORT = process.env.PORT || 3000;
 app.use(cors()); // Allows requests from other origins
 app.use(express.json()); // Parses incoming JSON payloads
 
-// Database Connection
 mongoose.connect(process.env.MONGODB_URI)
   .then(() => console.log('MongoDB Connected Successfully'))
   .catch(err => console.error('MongoDB Connection Error:', err));
 
-// --- API ROUTES ---
 
-// Root: Check if server is running
 app.get('/', (req, res) => {
   res.send('E-commerce API is running');
 });
 
+ // Q2.2
 
-/*
- * ========================================
- * Q2.2: Implement 3 APIs
- * ========================================
- */
-
-// API 1: /orders/<id>
+// API 1
 app.get('/orders/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -61,7 +53,7 @@ app.get('/orders/:id', async (req, res) => {
   }
 });
 
-// API 2: /users/<id>/orders
+// API 2
 app.get('/users/:id/orders', async (req, res) => {
   try {
     const { id } = req.params;
@@ -69,13 +61,11 @@ app.get('/users/:id/orders', async (req, res) => {
       return res.status(400).json({ message: 'Invalid User ID' });
     }
 
-    // Check if user exists first
     const user = await User.findById(id);
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    // Find orders and populate product details
     const orders = await Order.find({ user: id })
       .sort({ createdAt: -1 }) // Show newest orders first
       .populate('items.product', 'name price');
@@ -86,7 +76,7 @@ app.get('/users/:id/orders', async (req, res) => {
   }
 });
 
-// API 3: /products/<id>/reviews
+// API 3
 app.get('/products/:id/reviews', async (req, res) => {
   try {
     const { id } = req.params;
@@ -94,13 +84,11 @@ app.get('/products/:id/reviews', async (req, res) => {
       return res.status(400).json({ message: 'Invalid Product ID' });
     }
 
-    // Check if product exists
     const product = await Product.findById(id);
     if (!product) {
       return res.status(404).json({ message: 'Product not found' });
     }
 
-    // Find reviews and populate user details
     const reviews = await Review.find({ product: id })
       .sort({ createdAt: -1 })
       .populate('user', 'name location'); // Show who wrote the review
@@ -112,11 +100,8 @@ app.get('/products/:id/reviews', async (req, res) => {
 });
 
 
-/*
- * ========================================
- * Q2.3: Implement Search Endpoint (Keyword + Fuzzy)
- * ========================================
- */
+
+ // Q2.3
 app.get('/products/search', async (req, res) => {
   try {
     const { query } = req.query;
@@ -125,12 +110,10 @@ app.get('/products/search', async (req, res) => {
       return res.status(400).json({ message: 'Query parameter is required' });
     }
 
-    // 1. Keyword Search (using the $text index you defined in product.js)
-    // This is fast and uses stemming (e.g., "laptops" matches "laptop")
     const textResults = await Product.find(
       { $text: { $search: query } },
-      { score: { $meta: 'textScore' } } // Add relevance score
-    ).sort({ score: { $meta: 'textScore' } }); // Sort by relevance
+      { score: { $meta: 'textScore' } }
+    ).sort({ score: { $meta: 'textScore' } });
 
     if (textResults.length > 0) {
       return res.json({
@@ -140,11 +123,6 @@ app.get('/products/search', async (req, res) => {
       });
     }
 
-    // 2. Fallback: Basic Fuzzy Search (if no $text results)
-    // This uses a regular expression to catch misspellings.
-    // 'i' means case-insensitive.
-    // This is "fuzzy" but not true "similarity" (e.g., 'leptop' will NOT match 'laptop')
-    // For "hp leptop" -> "HP Laptop", you need Atlas Search ($search operator)
     const regex = new RegExp(query, 'i');
 
     const regexResults = await Product.find({
@@ -166,32 +144,23 @@ app.get('/products/search', async (req, res) => {
   }
 });
 
-
-/*
- * ========================================
- * Q1.4: Aggregation Pipeline
- * ========================================
- */
+// Q1.4
 app.get('/reports/top-products', async (req, res) => {
   try {
-    // 1. Get the date 30 days ago
     const oneMonthAgo = new Date();
     oneMonthAgo.setDate(oneMonthAgo.getDate() - 30);
 
-    // 2. Define the aggregation pipeline
     const pipeline = [
       {
-        // Stage 1: Filter orders from the last 30 days
+
         $match: {
           createdAt: { $gte: oneMonthAgo }
         }
       },
       {
-        // Stage 2: De-normalize the 'items' array
         $unwind: '$items'
       },
       {
-        // Stage 3: Group by product ID and sum quantities
         $group: {
           _id: '$items.product',
           totalPurchased: { $sum: '$items.quantity' }
@@ -257,6 +226,114 @@ app.get('/reports/top-products', async (req, res) => {
     res.status(500).json({ message: 'Aggregation Error', error: err.message });
   }
 });
+/*
+ * ========================================
+ * Q2. BONUS: Hybrid Ranking Search
+ * ========================================
+ */
+app.get('/products/search/hybrid', async (req, res) => {
+  try {
+    const { query, budget } = req.query;
+
+    if (!query) {
+      return res.status(400).json({ message: 'Query parameter is required' });
+    }
+
+    // --- 1. Define Weights ---
+    // These come from the prompt (40%, 40%, 20%)
+    const simWeight = 0.4;
+    const popWeight = 0.4;
+    const priceWeight = 0.2;
+    const userBudget = parseFloat(budget) || null;
+
+    // --- 2. Build Aggregation Pipeline ---
+
+    // Stage 1: $search for text similarity
+    // This is where the "hp leptop" -> "HP Laptop" magic happens
+    const searchStage = {
+      $search: {
+        index: 'hybrid_search_index', // The index you just created in Atlas
+        text: {
+          query: query,
+          path: ['name', 'description'],
+          fuzzy: {
+            maxEdits: 2,       // Allows for 2 misspellings or letter changes
+            prefixLength: 2  // The first 2 letters must be correct
+          }
+        }
+      }
+    };
+
+    // Stage 2: $project to get the similarity score
+    const projectStage = {
+      $project: {
+        // Include all original fields
+        _id: 1, name: 1, description: 1, category: 1, price: 1,
+        brand: 1, rating: 1, stock: 1, purchaseCount: 1, createdAt: 1,
+
+        // 1. Get the Similarity Score (from $search)
+        similarityScore: { $meta: 'searchScore' }
+      }
+    };
+
+    // Stage 3: $addFields to calculate the other scores
+    const addFieldsStage = {
+      $addFields: {
+
+      popularityScore: { $ln: { $add: [1, '$purchaseCount'] } },
+
+        // 3. Calculate Price Score (if budget is provided)
+        priceScore: userBudget ? {
+          // Uses Gaussian decay: score is 1.0 when price == budget,
+          // and decays as it gets further away.
+          $exp: {
+            $divide: [
+              { $pow: [{ $subtract: ['$price', userBudget] }, 2] },
+              -2 * Math.pow(userBudget * 0.5, 2) // 'scale' is 50% of budget
+            ]
+          }
+        } : 0 // If no budget is provided, price relevance is 0
+      }
+    };
+
+    // Stage 4: $addFields again to combine them into a final score
+    // (We need a separate stage because finalScore depends on the fields above)
+    const finalScoreStage = {
+       $addFields: {
+         // 4. Calculate Final Weighted Score
+         finalScore: {
+           $add: [
+             { $multiply: ['$similarityScore', simWeight] },
+             { $multiply: ['$popularityScore', popWeight] },
+             { $multiply: ['$priceScore', priceWeight] }
+           ]
+         }
+       }
+    };
+
+    // Stage 5: Sort by our new finalScore and limit the results
+    const sortStage = { $sort: { finalScore: -1 } };
+    const limitStage = { $limit: 20 };
+
+    // --- 3. Run the Pipeline ---
+    const pipeline = [
+      searchStage,
+      projectStage,
+      addFieldsStage,
+      finalScoreStage,
+      sortStage,
+      limitStage
+    ];
+
+    const products = await Product.aggregate(pipeline);
+    res.json(products);
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server Error', error: err.message });
+  }
+});
+
 
 
 // --- START SERVER ---

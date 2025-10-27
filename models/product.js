@@ -11,9 +11,9 @@ const ProductSchema = new mongoose.Schema({
   purchaseCount: { type: Number, default: 0 },
 }, { timestamps: true });
 
-// Text index for search (name + description)
+
 ProductSchema.index({ name: 'text', description: 'text' });
-// Compound indexes to support filtered + range queries and hybrid ranking
+
 ProductSchema.index({ category: 1, price: 1 });
 ProductSchema.index({ brand: 1, price: 1 });
 ProductSchema.index({ purchaseCount: -1 });
